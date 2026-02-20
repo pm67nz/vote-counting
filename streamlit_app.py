@@ -124,24 +124,54 @@ def read_ballots(f):
     Title of the election
     
     All tokens in the first half of the file are integers.
-    In this implementation, the ballot weights must all be 1.
     """
-    rows = []
-    row = None
-    while row != [0]:
-        row = [int(w) for w in f.readline().strip().split()]
-        rows.append(row)
-    (candidates, winners) = rows[0]
+    undervoted = overvoted = weighted = 0
+    candidates = seats = None
+    withdrawn = []
     ballots = []
-    for ballot in rows[1:-1]:
-        weight = ballot.pop(0)
-        sentinal = ballot.pop()
-        assert weight == 1
-        assert sentinal == 0
-        ballots.append((weight, [b-1 for b in ballot])) 
+    while True:
+        line = f.readline()
+        assert line, 'Unexpected end of file'
+        line = line.split('#')[0].strip()
+        if '=' in line:
+            line = line.replace('=', ' ')
+            overvoted += 1
+        words = line.split()
+        if '-' in words:
+            words = [w for w in words if w != '-']
+            undervoted += 1
+        row = [int(w) for w in words]
+        if not row:
+            pass
+        elif row == [0]:
+            break
+        elif candidates is None:
+            assert len(row) == 2, row
+            (candidates, seats) = row
+        elif max(row) < 0 and not (ballots or withdrawn):
+            assert min(row) < 0, 'Line with only some negative numbers'
+            withdrawn.extend(-c-1 for c in row)
+        else:
+            weight = row.pop(0)
+            sentinal = row.pop()
+            assert sentinal == 0, f'{sentinal} at end of line'
+            assert min(row) > 0, 'Unexpected negative numbers'
+            if weight != 1:
+                weighted += 1
+            ballots.append((weight, [c-1 for c in row]))
+        
     names = [f.readline().strip().replace('"', '') for c in range(candidates)]
+    assert '' not in names, 'Nameless candidate(s)'
+    assert len(set(names)) == len(names), 'Duplicate candidate names'
     title = f.readline().strip().replace('"', '')
-    return (ballots, names, title)  
+    
+    parse_warnings = [f'{flag} ballot lines {msg}' for (flag, msg) in [
+            (undervoted, 'included undervotes (skipped ranks). They will be renumbered.'),
+            (overvoted, 'included overvotes (tied rankings). They will be tie-broken by order of appearance.'),
+            (weighted, 'were weighted, ie: count as multiple ballots.')]
+        if flag]
+
+    return (ballots, names, title, parse_warnings, withdrawn, seats)  
 
 
 st.title('STV-SE ranking')
@@ -168,12 +198,19 @@ uploaded_file = st.file_uploader("Choose a ballot file",
         type=["txt", "blt"], 
         max_upload_size=10, 
         on_change=calculation_dirty,
-        help="A [ballot file](https://opavote.com/help/overview#blt-file-format) with all weights=1")
-if uploaded_file is not None:
-    (ballots, candidates, title) = read_ballots(StringIO(uploaded_file.getvalue().decode("utf-8")))
-    st.info('{} ballots and {} candidates. Title: "{}"'.format(len(ballots), len(candidates), title))
+        help="A [ballot file](https://opavote.com/help/overview#blt-file-format)")
 
-    withdrawn = st.multiselect("Select any candidates who have withdrawn", candidates, on_change=calculation_dirty)
+if uploaded_file is not None:
+    (ballots, candidates, title, parse_warnings, withdrawn, seats) = read_ballots(
+            StringIO(uploaded_file.getvalue().decode("utf-8")))
+
+    if parse_warnings:
+        st.warning('\n\n'.join(parse_warnings))
+
+    st.info('"{}"\n\n{} ballots and {} candidates.'.format(title, len(ballots), len(candidates)))
+
+    withdrawn = st.multiselect("Select any candidates who have withdrawn", candidates, on_change=calculation_dirty,
+        default = [candidates[w] for w in withdrawn])
     if withdrawn:
         plural = 's' if len(withdrawn) > 1 else ''
         st.info('{} candidate{} withdrawn leaving {} candidates.'.format(len(withdrawn), plural, len(candidates)-len(withdrawn)))
@@ -185,7 +222,7 @@ if uploaded_file is not None:
         def formatting():
             def store_reserved():
                 st.session_state.reserved = st.session_state.reserved_widget
-            reserved = st.radio("How many places are reserved for leader(s) etc", [0,1,2], 
+            reserved = st.radio("How many places to add on top for leader(s) etc", [0,1,2], 
                     index = st.session_state.reserved if 'reserved' in st.session_state else 0,
                     key = "reserved_widget", 
                     horizontal = True,
