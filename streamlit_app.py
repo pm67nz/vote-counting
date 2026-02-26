@@ -9,54 +9,59 @@
 # without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
 # See the GNU General Public License for more details.
 
+from collections import defaultdict
+from dataclasses import dataclass
+from io import StringIO
+from math import log10
+from hashlib import md5
+from base64 import urlsafe_b64encode 
+import datetime
 
 import numpy as np
-from collections import defaultdict
-
 import streamlit as st
 import pandas as pd
-from io import StringIO
 
-import math
-
-def meek_distribute_votes(ballots, keep_factor):
-    """Returns array of vote counts by candidate
-    The core of any STV algorithm is to work down each ballot trying to place
-    the vote with a candidate.  In the Meek algorithm, each candidate takes  
-    some fraction (their Keep Factor) of the votes offered to them this way.
+@dataclass
+class Ballots:
+    ballots: list(float, list(int))
+    num_candidates: int
     
-    ballots - Collection of sequence of candidate ordinals.
-    keep_factor - Sequence of Meek keep factors by candidate ordinal.
-     """
-    votes = np.zeros_like(keep_factor)
-    for (weight, ballot) in ballots:
-        remaining_weight = float(weight)
-        for candidate in ballot:
-            if remaining_weight <= 0: break
-            fractional_vote = keep_factor[candidate] * remaining_weight
-            votes[candidate] += fractional_vote
-            remaining_weight -= fractional_vote
-    return votes
+    @property
+    def votes(self):
+        return sum(w for (w,bs) in self.ballots)
+    
+    def len(self):
+        return len(self.ballots)
 
-def compact_ballots(ballots):
-    weights = defaultdict(int)
-    for (weight, ballot) in ballots:
-        weights[tuple(ballot)] += weight
-    ballots = [(weight, list(pattern)) for (pattern, weight) in weights.items()]
-    return ballots
+    def meek_distribute_votes(self, keep_factor):
+        votes = np.zeros_like(keep_factor)
+        for (weight, ballot) in self.ballots:
+            remaining_weight = float(weight)
+            for candidate in ballot:
+                if remaining_weight <= 0: break
+                fractional_vote = keep_factor[candidate] * remaining_weight
+                votes[candidate] += fractional_vote
+                remaining_weight -= fractional_vote
+        return votes
 
-def subset_with_weights(ballots, reverse_map, without):
-    considered = np.ones([len(reverse_map)], bool)
-    considered[without] = False
-    growmap = np.where(considered)[0]
-    reverse_map = reverse_map[list(growmap)]
-    shrinkmap = {b:a for (a,b) in enumerate(growmap)}
-    ballots = [(weight, [shrinkmap[b] for b in ballot if considered[b]]) for (weight, ballot) in ballots]
-    ballots = compact_ballots(ballots)
-    return (ballots, reverse_map)
+    def compacted(self):
+        weights = defaultdict(int)
+        for (weight, ballot) in self.ballots:
+            weights[tuple(ballot)] += weight
+        ballots = [(weight, list(pattern)) for (pattern, weight) in weights.items()]
+        return Ballots(ballots, self.num_candidates)
 
-#@st.cache_data
-def meek_se(ballots, withdrawn=[]):
+    def subset(self, reverse_map, without):
+        considered = np.ones([len(reverse_map)], bool)
+        considered[without] = False
+        growmap = np.where(considered)[0]
+        reverse_map = reverse_map[list(growmap)]
+        shrinkmap = {b:a for (a,b) in enumerate(growmap)}
+        ballots = [(weight, [shrinkmap[b] for b in ballot if considered[b]]) for (weight, ballot) in self.ballots]
+        return (Ballots(ballots, len(reverse_map)), reverse_map)
+
+
+def generate_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
     """List Ranking by Sequential Exclusion using Meek STV with minimal complications,
     so no artificial limits on precision, and no complicated tie-breaking options.
     
@@ -67,50 +72,76 @@ def meek_se(ballots, withdrawn=[]):
     withdrawn - Collection of candidates to ignore.
     """
 
-    my_bar = st.progress(0.0, text="Ranking")
-
-    eta = 1e-6
-    orig_num_candidates = max(max(b) for (w,b) in ballots) + 1
+    num_candidates = ballots.num_candidates
     order_of_exclusion = []
-    reverse_map = np.arange(0, orig_num_candidates, dtype=int)
+    reverse_map = np.arange(0, num_candidates, dtype=int)
     excluded = withdrawn
-    nvc = orig_num_candidates - len(withdrawn)
-    steps_total = nvc**3 / 3 + nvc**2 / 2 + nvc / 6  # Sum of square pyrimidal numbers
-    steps_done = 0
-    for position in range(nvc, 0, -1):
-        # prepare for next round with n-1 candidates
-        (ballots, reverse_map) = subset_with_weights(ballots, reverse_map, excluded)
-        num_candidates = len(reverse_map)
+    nvc = num_candidates - len(withdrawn)
+    
+    seats = max_seats = min(max_seats or nvc, nvc)
+    positions = list(range(nvc, 0, -1))
 
-        hopeful = np.ones([num_candidates], bool)
-        elected = np.zeros([num_candidates], bool)
-        keep_factor = np.ones([num_candidates], float)
+    efforts = [(p if p <= seats+1 else max(seats**0.5,seats*2-p)/2)**2 for p in range(nvc, 0, -1)] 
+    efforts[0] = max(efforts[0], max(efforts)/2)
+    steps_total = sum(efforts)
+    steps_done = 0
+
+    hopeful = np.ones([num_candidates], bool)
+    elected = np.zeros([num_candidates], bool)
+    keep_factor = np.ones([num_candidates], float)
+    
+    for (position, effort) in zip(positions, efforts):
+        seats = min(position - 1, max_seats)
+        method = 'STV-SE' if position <= max_seats else 'STV'
         
-        # Find the N-1 winners, one at a time
-        seats = position - 1
-        for seat in range(seats):
+        if method == 'STV-SE':
+            # Reset the winners as we are reducing the number of seats
+            hopeful |= elected
+            keep_factor[hopeful] = 1.0
+            elected[:] = False
+
+        if excluded:
+            hopeful[excluded] = False
+            keep_factor[excluded] = 0
+            num_candidates -= len(excluded)
+            if compact:
+                # This makes no difference to the result, just an optimisation
+                # (with a fairly unimpressive performance benefit).
+                (ballots, reverse_map) = ballots.subset(reverse_map, excluded)
+                ballots = ballots.compacted()
+                assert num_candidates == len(reverse_map)
+                keep = hopeful | elected
+                hopeful = hopeful[keep]
+                elected = elected[keep]
+                keep_factor = keep_factor[keep]
+            excluded = []
+        
+        message = f"{method} Electing {seats} out of {num_candidates}"
+        steps_done += effort
+
+        while any(hopeful):
             # Adjust the keep factors of elected candidates
             while True:
-                votes = meek_distribute_votes(ballots, keep_factor)
+                votes = ballots.meek_distribute_votes(keep_factor)
                 quota = sum(votes)/(seats+1)
                 if all(np.abs(votes[elected]/quota - 1) < eta):
                     break
                 keep_factor[elected] = np.minimum(1.0, keep_factor[elected] * quota / votes[elected])
-            # Deal with one winner
-            candidate = (np.where(hopeful)[0])[np.argmax(votes[hopeful])]
-            hopeful[candidate] = False
-            elected[candidate] = True
-            steps_done += (num_candidates+1)
-            my_bar.progress(steps_done / steps_total, text="Ranking")
-        
-        # The lone remaining candidate is to be excluded
-        assert sum(hopeful) == 1
-        excluded = np.where(hopeful)[0][0]
-        order_of_exclusion.append(reverse_map[excluded])
-    
-    order_of_exclusion.reverse()
-    my_bar.empty()
-    return order_of_exclusion
+            # At least one candidate must now be elected or excluded
+            vacancies = seats - elected.sum()
+            reached_quota = hopeful.nonzero()[0][votes[hopeful] > quota+eta]
+            while reached_quota.size > vacancies:
+                reached_quota = np.delete(reached_quota, [])
+            if reached_quota.size > 0:
+                elected[reached_quota] = True
+                hopeful[reached_quota] = False
+            else:
+                lowest = hopeful.nonzero()[0][np.argmin(votes[hopeful])]
+                excluded.append(lowest)
+                keep_factor[lowest] = 0
+                hopeful[lowest] = False
+                yield (steps_done / steps_total, message, reverse_map[lowest])
+                break
 
 def read_ballots(f):
     """Read a .blt format file of ballots.
@@ -171,74 +202,158 @@ def read_ballots(f):
             (weighted, 'were weighted, ie: count as multiple ballots.')]
         if flag]
 
-    return (ballots, names, title, parse_warnings, withdrawn, seats)  
+    return (ballots, names, title, parse_warnings, withdrawn, seats)
 
 
+@st.cache_data(max_entries=1, show_spinner=False, scope="session")
+def streamlit_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
+    result = []
+    my_bar = st.progress(0.0)
+    for (progress, msg, candidate) in generate_meek_se(ballots, 
+            max_seats=max_seats, withdrawn=withdrawn, eta=eta, compact=compact):
+        my_bar.progress(progress, text=msg)
+        result.append(candidate)
+    my_bar.empty()
+    result.reverse()    
+    return result
+
+    
 st.title('STV-SE ranking')
-st.subheader('For generating an ordered Party List from ranked ballots.')
-with st.expander("Definition"):
-    st.markdown('''STV with Sequential Exclusion can be defined in two ways which turn out to be equivalent:
+st.text('Generates an ordered Party List via Meek STV with Sequential Exclusion.', 
+help = '''### STV with Sequential Exclusion
 
-1) A series of ordinary STV elections for an ever reducing number of seats: 
-Given N candidates count the ballots as if for an N-1 seat election, remove the single loser from 
-the set of candidates, count the ballots as if for an N-2 seat election, etc.  This is the definition 
-given in [Voting Matters 9](https://www.votingmatters.org.uk/ISSUE9/P4.HTM).
+Given N candidates count the ballots as if for an ordinary N-1 seat STV election. Remove the lone non-winner from 
+the set of candidates, placing them last in the overall result. Count the ballots as if for an N-2 seat STV election
+and so on. See [Voting Matters 9](https://www.votingmatters.org.uk/ISSUE9/P4.HTM).
 
-2) An STV election in which, whenever a candidate is excluded, the number of seats is decremented 
-(and so the quota raised) before continuing.
+Equivalently, one STV election in which as soon all the seats are filled, the number of seats
+is decremented (and so the quota raised and the winners reset) before continuing.
+
 ''')
 
-def calculation_dirty():
-    st.session_state.done = False    
-
-def calculation_done():
-    st.session_state.done = True    
 
 uploaded_file = st.file_uploader("Choose a ballot file", 
         type=["txt", "blt"], 
         max_upload_size=10, 
-        on_change=calculation_dirty,
         help="A [ballot file](https://opavote.com/help/overview#blt-file-format)")
 
-if uploaded_file is not None:
-    (ballots, candidates, title, parse_warnings, withdrawn, seats) = read_ballots(
-            StringIO(uploaded_file.getvalue().decode("utf-8")))
-
+if uploaded_file is None:
+    candidates = []
+    withdrawn = []
+    file_seats = nc = 0
+    ballots = None
+else:
+    data = uploaded_file.getvalue()
+    checksum = urlsafe_b64encode(md5(data).digest()).decode('utf-8').strip('=')
+    (ballots, candidates, title, parse_warnings, withdrawn, file_seats) = read_ballots(
+            StringIO(data.decode("utf-8")))
+    ballots = Ballots(ballots, len(candidates))
     if parse_warnings:
         st.warning('\n\n'.join(parse_warnings))
+    nc = len(candidates)
+    st.info(f'"{title}" - {nc} candidates and {ballots.votes} ballots.', icon=":material/summarize:")
+    
+withdrawn = st.multiselect("Select any candidates who have withdrawn", candidates, 
+    default = [candidates[w] for w in withdrawn])
+nvc = len(candidates) - len(withdrawn)
 
-    st.info('"{}"\n\n{} ballots and {} candidates.'.format(title, len(ballots), len(candidates)))
+max_rank_opts, min_rank_opts = st.columns(2, gap="medium")
 
-    withdrawn = st.multiselect("Select any candidates who have withdrawn", candidates, on_change=calculation_dirty,
-        default = [candidates[w] for w in withdrawn])
-    if withdrawn:
-        plural = 's' if len(withdrawn) > 1 else ''
-        st.info('{} candidate{} withdrawn leaving {} candidates.'.format(len(withdrawn), plural, len(candidates)-len(withdrawn)))
+with max_rank_opts:
+    st.text('Maximum number to rank', help="This many candidates will first be selected with ordinary "
+            "STV, which will be faster than STV-SE and may give better results at the end of the list.")
+    with st.container(horizontal=True):        
+        def custom_seats_set():
+            if st.session_state.seats is not None:
+                st.session_state.seat_source = None
+            elif st.session_state.seat_source is None:
+                st.session_state.seat_source = 'All'
         
-    if st.session_state.get("done", False) or st.button("Calculate Ranking", on_click=calculation_done):
-        result = meek_se(ballots, withdrawn=[candidates.index(name) for name in withdrawn])
+        qseats = st.query_params.get('seats')
+        seats = None
+        if qseats and 'seat_source' not in st.session_state:
+            if qseats.lower() == 'file':
+                st.session_state.seat_source = 'File'
+            elif qseats.lower() == 'all':
+                st.session_state.seat_source = 'All'
+            else:
+                st.session_state.seat_source = None
+                seats = int(qseats)
+                
+        source_options = {'File': file_seats, 'All': nvc}
+        source = st.radio('Number to rank', source_options, horizontal = True, 
+            label_visibility = "collapsed",
+            key = "seat_source",
+            index = list(source_options).index(st.session_state.get('seat_source') or 'All'),
+            captions = [str(v or '') for v in source_options.values()],
+            help="This many candidates will first be selected with ordinary "
+            "STV, which will be faster than STV-SE and may give better results at the end of the list.")
+        if source is not None and ballots is not None:
+            st.session_state.seats = source_options[source]
+        seats = st.number_input("Seats", width=150, label_visibility="collapsed",
+                key = "seats", value=seats, on_change=custom_seats_set, min_value = 1, max_value=100)
+        seats = min(nvc, seats or nvc)
+           
+with min_rank_opts:
+    st.text("Places to leave on top for leader(s)")
+    reserved = st.radio("Places to add on top for leader(s) etc", [0,1,2], 
+            index = int(st.query_params.get('top') or 0), label_visibility = "collapsed", horizontal = True)
 
-        @st.fragment
-        def formatting():
-            def store_reserved():
-                st.session_state.reserved = st.session_state.reserved_widget
-            reserved = st.radio("How many places to add on top for leader(s) etc", [0,1,2], 
-                    index = st.session_state.reserved if 'reserved' in st.session_state else 0,
-                    key = "reserved_widget", 
-                    horizontal = True,
-                    on_change = store_reserved)
+ee = 6
+compact = True
+
+result = None
+if 'adv' in st.query_params:
+    with st.container(border=True):
+        with st.container(width="content", height="content", horizontal=True, vertical_alignment="center"):
+            ee = st.slider('Digits of precision', key='ee', max_value=15, min_value=1, value=ee)
+            st.space()
+            compact = st.toggle('compact ballots', value=compact)        
+    
+if ballots is not None:
+    result = streamlit_meek_se(ballots, seats, withdrawn=[candidates.index(name) for name in withdrawn], 
+        eta=10**-ee, compact=compact)
+    when = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M %Z')
+    result = [None] * reserved + result
+    seats += reserved
+    
+    # FORMATING RESULT   
+    
+    factoids = ''.join(f'{n}: {v}\n' for (n,v) in {
+            'Ballot file md5 checksum': checksum,
+            'Title': title, 
+            'Ballots': ballots.votes,
+            'Listed Candidates': nc,
+            'Withdrawn': ', '.join(withdrawn) or 'none',
+            'Remaining Candidates': nvc,
+            'Counted at': when,
+            'Precision': f'1e-{ee}',
+        }.items())
             
-            def text(width, delim):
-                lines = [f'{i:{width}}{delim}{candidates[c]}' for (i,c) in enumerate(result, start=reserved+1)]
-                return '\n'.join(lines+[''])
-            
+    def generate_text(width, delim):
+        lines = ['{Rank:{width}}{delim}{Candidate}'.format(width=width, delim=delim, 
+                    Rank = i+1 if i < seats else '', 
+                    Candidate = '' if c is None else candidates[c]) 
+                for (i,c) in enumerate(result)]
+        return '\n'.join(lines+[''])
+    
+    digits = int(log10(seats)) + 1
+    formats = [
+        ('Report', factoids, digits, '  ', 'txt'),
+        ('CSV',  'Rank,Candidate', 1,  ',',  'csv'),
+        ('TSV',  'Rank\tCandidate', 1, '\t', 'txt'),
+        ]
+    
+    tabs = st.tabs([fmt[0] for fmt in formats])
+    for (tab, fmt) in zip(tabs, formats):
+        with tab:
+            (name, head, width, delim, suffix) = fmt
+            text = head + '\n' + generate_text(width, delim)
             with st.container(horizontal=True):
-                digits = int(math.log10(len(result)+reserved)) + 1
-                st.download_button("Download Text", f'{title}\n\n' + text(digits, '  '), file_name=f'{title} Result.txt', mime='text/plain')
-                st.download_button("Download CSV",  'Rank,Candidate\n' + text(1, ','),   file_name=f'{title} Result.csv', mime='text/plain')
+                st.code(text, language=None)
+                st.download_button("", text, key=name, help=f"Download {name}", icon=":material/download:",
+                        on_click="ignore", file_name=f'{title} Result.{suffix}')
 
-            table = pd.DataFrame({'Candidate': [candidates[c] for c in result]}, 
-                index = list(range(reserved+1, len(result)+reserved+1)))
-            st.table(table)
-        formatting()
+
+
 
