@@ -15,11 +15,13 @@ from io import StringIO
 from math import log10
 from hashlib import md5
 from base64 import urlsafe_b64encode 
+from time import time
 import datetime
 
 import numpy as np
 import streamlit as st
 import pandas as pd
+import altair as alt
 
 @dataclass
 class Ballots:
@@ -61,7 +63,7 @@ class Ballots:
         return (Ballots(ballots, len(reverse_map)), reverse_map)
 
 
-def generate_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
+def generate_meek_se(ballots, max_seats=None, withdrawn=[], profile={}, eta=1e-6, compact=True):
     """List Ranking by Sequential Exclusion using Meek STV with minimal complications,
     so no artificial limits on precision, and no complicated tie-breaking options.
     
@@ -91,6 +93,7 @@ def generate_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=Tr
     keep_factor = np.ones([num_candidates], float)
     
     for (position, effort) in zip(positions, efforts):
+        t0 = time()
         seats = min(position - 1, max_seats)
         method = 'STV-SE' if position <= max_seats else 'STV'
         
@@ -142,6 +145,9 @@ def generate_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=Tr
                 hopeful[lowest] = False
                 yield (steps_done / steps_total, message, reverse_map[lowest])
                 break
+        t1 = time()
+        profile['position'].append(position)
+        profile['elapsed'].append(t1 - t0)
 
 def read_ballots(f):
     """Read a .blt format file of ballots.
@@ -209,13 +215,15 @@ def read_ballots(f):
 def streamlit_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
     result = []
     my_bar = st.progress(0.0)
+    profile_dict = defaultdict(list)
     for (progress, msg, candidate) in generate_meek_se(ballots, 
-            max_seats=max_seats, withdrawn=withdrawn, eta=eta, compact=compact):
+            max_seats=max_seats, withdrawn=withdrawn,
+            profile=profile_dict, eta=eta, compact=compact):
         my_bar.progress(progress, text=msg)
         result.append(candidate)
     my_bar.empty()
     result.reverse()    
-    return result
+    return (result, pd.DataFrame(profile_dict))
 
     
 st.title('STV-SE ranking')
@@ -302,6 +310,21 @@ with min_rank_opts:
 ee = 6
 compact = True
 
+def calculate(profile=False):
+    (result, profile_df) = streamlit_meek_se(ballots, seats, withdrawn=[candidates.index(name) for name in withdrawn], 
+        eta=10**-ee, compact=compact)
+    when = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M %Z')
+    
+    # PERFORMANCE PROFILING
+    if profile:
+        st.text('{:.2g} seconds'.format(sum(profile_df['elapsed'])))
+        st.altair_chart(alt.Chart(profile_df).mark_bar().encode(
+            x = alt.X('position:O', sort="descending"),
+            y = alt.Y('elapsed:Q'),
+        ), height=200)
+        
+    return (result, when)
+
 result = None
 if 'adv' in st.query_params:
     with st.container(border=True):
@@ -309,11 +332,12 @@ if 'adv' in st.query_params:
             ee = st.slider('Digits of precision', key='ee', max_value=15, min_value=1, value=ee)
             st.space()
             compact = st.toggle('compact ballots', value=compact)        
+        if ballots is not None:
+            (result, when) = calculate(profile=True)
+elif ballots is not None:
+    (result, when) = calculate()
     
-if ballots is not None:
-    result = streamlit_meek_se(ballots, seats, withdrawn=[candidates.index(name) for name in withdrawn], 
-        eta=10**-ee, compact=compact)
-    when = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M %Z')
+if result is not None:
     result = [None] * reserved + result
     seats += reserved
     
