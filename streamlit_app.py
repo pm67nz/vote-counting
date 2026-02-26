@@ -16,6 +16,7 @@ from math import log10
 from hashlib import md5
 from base64 import urlsafe_b64encode 
 from time import time
+import re
 import datetime
 
 import numpy as np
@@ -91,7 +92,7 @@ def generate_meek_se(ballots, max_seats=None, withdrawn=[], profile={}, eta=1e-6
     hopeful = np.ones([num_candidates], bool)
     elected = np.zeros([num_candidates], bool)
     keep_factor = np.ones([num_candidates], float)
-    
+
     for (position, effort) in zip(positions, efforts):
         t0 = time()
         seats = min(position - 1, max_seats)
@@ -225,6 +226,47 @@ def streamlit_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=T
     result.reverse()    
     return (result, pd.DataFrame(profile_dict))
 
+def parse_result(text):
+    lines = text.split('\n')
+    result = []
+    committed = False
+    for line in lines:
+        line = line.strip()
+        if ':' in line or len(line)==0:
+            continue
+        words = re.split(' +|[\t,]', line)
+        if re.match('[0-9]+', words[0]):
+            del words[0]
+        if words:
+            result.append(' '.join(words))
+    return result
+            
+def diff_chart(reference, current):
+    list_names = ['Reference', 'Current']
+    lists = [reference, current]
+    
+    dfs = [pd.DataFrame(
+        {'cand': cands, 'list': [list_name]*len(cands), 'rank': range(1, len(cands)+1)})
+        for (list_name, cands) in zip(list_names, lists)]
+
+    base = alt.Chart(pd.concat(dfs))    
+    x = alt.X('list:N', sort=list_names).axis(labelAngle=0, orient="top", title='')
+    y = alt.Y('rank:O').axis().title('')
+
+    chart = base.mark_line().encode(x=x, y=y, detail='cand')
+    for (align, dx, list_name, cands) in zip(['right', 'left'], [-8, 8], list_names, lists):
+        label = base.mark_text(align=align, dx=dx).encode(
+                x=x, y=y, text=alt.Text('cand')).transform_filter(
+                alt.datum.list == list_name)
+        chart += label
+
+    return chart
+
+@dataclass
+class Result:
+    """Class for keeping track of results for diffing."""
+    description: str
+    ordered_names: list[str]
     
 st.title('STV-SE ranking')
 st.text('Generates an ordered Party List via Meek STV with Sequential Exclusion.', 
@@ -368,7 +410,7 @@ if result is not None:
         ('TSV',  'Rank\tCandidate', 1, '\t', 'txt'),
         ]
     
-    tabs = st.tabs([fmt[0] for fmt in formats])
+    tabs = st.tabs([fmt[0] for fmt in formats] + ['Diff'])
     for (tab, fmt) in zip(tabs, formats):
         with tab:
             (name, head, width, delim, suffix) = fmt
@@ -378,6 +420,67 @@ if result is not None:
                 st.download_button("", text, key=name, help=f"Download {name}", icon=":material/download:",
                         on_click="ignore", file_name=f'{title} Result.{suffix}')
 
+    # DIFFING
+    
+    with tabs[-1]:
+        with st.container(horizontal=True):
+            reference = st.session_state.get('reference_result')
+            current = Result(
+                ordered_names = [candidates[c] for c in result if c is not None],
+                description = factoids)
+            with st.container(horizontal=False):
+                if reference is None:
+                    st.text('Save a reference result first')
+                else:
+                    st.altair_chart(diff_chart(reference.ordered_names, current.ordered_names))
+                    cols = st.columns(2)
+                    for (r,c) in zip([reference, current], cols):
+                        with c:
+                            if r:
+                                st.caption(r.description)
+                            else:
+                                st.space()
+                            
+            with st.container(horizontal=False, width="content"):
+                st.button(":material/download:", key="dummy", disabled=True, 
+                        help="See the chart's own menu to download an image")
+                
+                st.space()
+
+                def save_ref():
+                    st.session_state.undo_reference_result = st.session_state.get('reference_result')
+                    st.session_state.reference_result = current
+                st.button(':material/arrow_left_alt:', on_click=save_ref, 
+                    disabled = (current == reference), help="Save current as reference")
+                    
+                @st.dialog('Upload Referemce')
+                def upload_ref():
+                    uploaded_file = st.file_uploader("Choose a result file", 
+                        type=["txt", "csv", "result"], 
+                        max_upload_size=1, 
+                        help="An ordered list of names")
+                    text = st.text_area('Or paste an election result here')
+                    if uploaded_file:
+                        source = 'Uploaded'
+                        text = uploaded_file.getvalue().decode("utf-8")
+                    else:
+                        source = 'Pasted'
+                    if text:
+                        names = parse_result(text)
+                        st.session_state.undo_reference_result = st.session_state.get('reference_result')
+                        st.session_state.reference_result = Result(description=source, ordered_names=names)
+                        st.rerun()
+                st.button(':material/add:', on_click=upload_ref, help="Load a reference result")
+
+                #st.button(':material/content_paste:', on_click=upload_ref, help="Paste a reference result")
+
+                def undo_ref():
+                    st.session_state.reference_result = st.session_state.get("undo_reference_result")
+                    st.session_state.undo_reference_result = None
+                st.button(':material/undo:', on_click=undo_ref, 
+                    disabled = (st.session_state.get('undo_reference_result') is None),
+                    help="Restore previous reference")
+    
 
 
 
