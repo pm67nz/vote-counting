@@ -26,9 +26,7 @@ import altair as alt
 
 from collections.abc import Sequence, Set
     
-class RankedBallots:
-    BALLOT_TYPE = tuple
-
+class Ballots:
     def __init__(self, ballots, num_candidates=None):
         self.ballots = tuple((w, self.BALLOT_TYPE(cs)) for (w,cs) in ballots)
         if num_candidates is None:
@@ -66,6 +64,12 @@ class RankedBallots:
         retained = np.ones([self.num_candidates], bool)
         retained[without] = False
         return self.subset(retained)
+
+class ApprovalBallots(Ballots):
+    BALLOT_TYPE = frozenset
+    
+class RankedBallots(Ballots):
+    BALLOT_TYPE = tuple
             
     def meek_distribute_votes(self, keep_factor):
         votes = np.zeros_like(keep_factor)
@@ -77,6 +81,23 @@ class RankedBallots:
                 votes[candidate] += fractional_vote
                 remaining_weight -= fractional_vote
         return votes
+
+    def condorcet_matrix(self):
+        d = np.zeros([self.num_candidates, self.num_candidates], int)
+        for (weight, ranking) in self.ballots:
+            for (rank, candidate) in enumerate(ranking):
+                for beaten in ranking[rank+1:]:
+                    d[candidate, beaten] += weight
+        return d
+
+    def approved_over(self, candidate):
+        degenerate_ballots = defaultdict(int)
+        for (weight, ranking) in self.ballots:
+            trunc = ranking.index(candidate) if candidate in ranking else len(ranking)
+            preferred = frozenset(ballot[:trunc])
+            degenerate_ballots[preferred] += weight
+        return ApprovalBallots((weight, preferred) for (preferred, weight) in degenerate_ballots.items())
+        
 
 def generate_meek_se(ballots, max_seats=None, withdrawn=[], profile={}, eta=1e-6, compact=True):
     """List Ranking by Sequential Exclusion using Meek STV with minimal complications,
