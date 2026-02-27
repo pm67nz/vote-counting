@@ -24,9 +24,11 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
+from collections.abc import Sequence
+
 @dataclass
 class Ballots:
-    ballots: list[tuple[float, list[int]]]
+    ballots: Sequence[tuple[float, Sequence[int]]]
     num_candidates: int
     
     @property
