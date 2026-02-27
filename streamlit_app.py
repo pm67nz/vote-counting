@@ -56,14 +56,16 @@ class Ballots:
         ballots = [(weight, list(pattern)) for (pattern, weight) in weights.items()]
         return Ballots(ballots, self.num_candidates)
 
-    def subset(self, reverse_map, without):
-        considered = np.ones([len(reverse_map)], bool)
-        considered[without] = False
-        growmap = np.where(considered)[0]
-        reverse_map = reverse_map[list(growmap)]
+    def subset(self, retained, *locate):
+        growmap = np.where(retained)[0]
         shrinkmap = {b:a for (a,b) in enumerate(growmap)}
-        ballots = [(weight, [shrinkmap[b] for b in ballot if considered[b]]) for (weight, ballot) in self.ballots]
-        return (Ballots(ballots, len(reverse_map)), reverse_map)
+        ballots = [(weight, [shrinkmap[c] for c in ballot if retained[c]]) for (weight, ballot) in self.ballots]
+        return (Ballots(ballots, retained.sum()), growmap) + tuple(shrinkmap[c] for c in locate)
+    
+    def without(self, without):
+        retained = np.ones([self.num_candidates], bool)
+        retained[without] = False
+        return self.subset(retained)
 
 
 def generate_meek_se(ballots, max_seats=None, withdrawn=[], profile={}, eta=1e-6, compact=True):
@@ -113,9 +115,10 @@ def generate_meek_se(ballots, max_seats=None, withdrawn=[], profile={}, eta=1e-6
             if compact:
                 # This makes no difference to the result, just an optimisation
                 # (with a fairly unimpressive performance benefit).
-                (ballots, reverse_map) = ballots.subset(reverse_map, excluded)
-                ballots = ballots.compacted()
+                (ballots, map_back) = ballots.without(excluded)
+                reverse_map = reverse_map[map_back]
                 assert num_candidates == len(reverse_map)
+                ballots = ballots.compacted()
                 keep = hopeful | elected
                 hopeful = hopeful[keep]
                 elected = elected[keep]
