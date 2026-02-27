@@ -24,20 +24,49 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-from collections.abc import Sequence
+from collections.abc import Sequence, Set
+    
+class RankedBallots:
+    BALLOT_TYPE = tuple
 
-@dataclass
-class Ballots:
-    ballots: Sequence[tuple[float, Sequence[int]]]
-    num_candidates: int
+    def __init__(self, ballots, num_candidates=None):
+        self.ballots = tuple((w, self.BALLOT_TYPE(cs)) for (w,cs) in ballots)
+        if num_candidates is None:
+            num_candidates = max(max(ballot) for (weight, ballot) in self.ballots) + 1
+        self.num_candidates = num_candidates
+
+    def __hash__(self):
+        return hash(self.ballots)
+        
+    def __eq__(self, other):
+        return self is other or self.ballots == other.ballots
+    
+    def __iter__(self):
+        return iter(self.ballots)
     
     @property
     def votes(self):
-        return sum(w for (w,bs) in self.ballots)
-    
-    def len(self):
-        return len(self.ballots)
+        return sum(weight for (weight, ballot) in self.ballots)
 
+    def compacted(self):
+        packed_ballots = defaultdict(int)
+        for (weight, ballot) in self.ballots:
+            packed_ballots[ballot] += weight
+        ballots = [(weight, ballot) for (ballot, weight) in packed_ballots.items()]
+        return type(self)(ballots, self.num_candidates)
+
+    def subset(self, retained, *locate):
+        growmap = np.where(retained)[0]
+        shrinkmap = {b:a for (a,b) in enumerate(growmap)}
+        ballots = [(weight, self.BALLOT_TYPE(shrinkmap[c] for c in ballot if retained[c])) 
+                for (weight, ballot) in self.ballots]
+        return (type(self)(ballots, retained.sum()), growmap) + tuple(shrinkmap[c] for c in locate)
+    
+    def without(self, without):
+        retained = np.ones([self.num_candidates], bool)
+        retained[without] = False
+        return self.subset(retained)
+            
     def meek_distribute_votes(self, keep_factor):
         votes = np.zeros_like(keep_factor)
         for (weight, ballot) in self.ballots:
@@ -48,25 +77,6 @@ class Ballots:
                 votes[candidate] += fractional_vote
                 remaining_weight -= fractional_vote
         return votes
-
-    def compacted(self):
-        weights = defaultdict(int)
-        for (weight, ballot) in self.ballots:
-            weights[tuple(ballot)] += weight
-        ballots = [(weight, list(pattern)) for (pattern, weight) in weights.items()]
-        return Ballots(ballots, self.num_candidates)
-
-    def subset(self, retained, *locate):
-        growmap = np.where(retained)[0]
-        shrinkmap = {b:a for (a,b) in enumerate(growmap)}
-        ballots = [(weight, [shrinkmap[c] for c in ballot if retained[c]]) for (weight, ballot) in self.ballots]
-        return (Ballots(ballots, retained.sum()), growmap) + tuple(shrinkmap[c] for c in locate)
-    
-    def without(self, without):
-        retained = np.ones([self.num_candidates], bool)
-        retained[without] = False
-        return self.subset(retained)
-
 
 def generate_meek_se(ballots, max_seats=None, withdrawn=[], profile={}, eta=1e-6, compact=True):
     """List Ranking by Sequential Exclusion using Meek STV with minimal complications,
@@ -155,7 +165,8 @@ def generate_meek_se(ballots, max_seats=None, withdrawn=[], profile={}, eta=1e-6
         profile['position'].append(position)
         profile['elapsed'].append(t1 - t0)
 
-def read_ballots(f):
+@st.cache_data(max_entries=1, show_spinner=False, scope="session")
+def parse_ballots(text):
     """Read a .blt format file of ballots.
     File format is 
     <#candidates> <#winners>
@@ -172,6 +183,7 @@ def read_ballots(f):
     candidates = seats = None
     withdrawn = []
     ballots = []
+    f = StringIO(text)
     while True:
         line = f.readline()
         assert line, 'Unexpected end of file'
@@ -217,7 +229,7 @@ def read_ballots(f):
     return (ballots, names, title, parse_warnings, withdrawn, seats)
 
 
-@st.cache_data(max_entries=1, show_spinner=False, scope="session")
+@st.cache_data(max_entries=1, show_spinner=False, scope="session", hash_funcs = {RankedBallots: hash})
 def streamlit_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
     result = []
     my_bar = st.progress(0.0)
@@ -300,13 +312,12 @@ if uploaded_file is None:
 else:
     data = uploaded_file.getvalue()
     checksum = urlsafe_b64encode(md5(data).digest()).decode('utf-8').strip('=')
-    (ballots, candidates, title, parse_warnings, withdrawn, file_seats) = read_ballots(
-            StringIO(data.decode("utf-8")))
-    ballots = Ballots(ballots, len(candidates))
+    (ballots, candidates, title, parse_warnings, withdrawn, file_seats) = parse_ballots(data.decode("utf-8"))
+    ballots = RankedBallots(ballots, len(candidates))
     if parse_warnings:
         st.warning('\n\n'.join(parse_warnings))
     nc = len(candidates)
-    st.info(f'"{title}" - {nc} candidates and {ballots.votes} ballots.', icon=":material/summarize:")
+    st.info(f'"{title}" - {nc} candidates and {ballots.votes} votes.', icon=":material/summarize:")
     
 withdrawn = st.multiselect("Select any candidates who have withdrawn", candidates, 
     default = [candidates[w] for w in withdrawn])
