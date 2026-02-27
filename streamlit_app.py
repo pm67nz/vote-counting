@@ -26,7 +26,7 @@ import altair as alt
 
 @dataclass
 class Ballots:
-    ballots: list(float, list(int))
+    ballots: list[tuple[float, list[int]]]
     num_candidates: int
     
     @property
