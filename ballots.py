@@ -1,6 +1,7 @@
 import numpy as np
 from collections import defaultdict
 from io import StringIO
+import shlex
 
 class Ballots:
     def __init__(self, ballots, num_candidates=None, votes=None):
@@ -126,10 +127,18 @@ def parse_ballots(text):
                 weighted += 1
             ballots.append((weight, [c-1 for c in row]))
         
-    names = [f.readline().strip().replace('"', '') for c in range(candidates)]
-    assert '' not in names, 'Nameless candidate(s)'
+    names1 = []
+    names2 = []
+    for line in f.readlines():
+        line = line.strip()
+        names1.extend([n.strip('"') for n in shlex.split(line, comments=True, posix=False) if n])
+        names2.append(line.strip('"'))
+    def err(names):
+        return abs(len(names) - (candidates + 1))
+    names = names1 if err(names1) < err(names2) else names2 
+    title = names[candidates]
+    names = names[:candidates]
     assert len(set(names)) == len(names), 'Duplicate candidate names'
-    title = f.readline().strip().replace('"', '')
     
     parse_warnings = [f'{flag} ballot lines {msg}' for (flag, msg) in [
             (undervoted, 'included undervotes (skipped ranks). They will be renumbered.'),

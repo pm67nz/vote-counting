@@ -103,7 +103,7 @@ is decremented (and so the quota raised and the winners reset) before continuing
 
 
 uploaded_file = st.file_uploader("Choose a ballot file", 
-        type=["txt", "blt"], 
+        type=["txt", "blt", "hil"], 
         max_upload_size=10, 
         help="A [ballot file](https://opavote.com/help/overview#blt-file-format)")
 
