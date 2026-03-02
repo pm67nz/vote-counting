@@ -97,11 +97,11 @@ def parse_result(text):
             
 def diff_chart(reference, current):
     list_names = ['Reference', 'Current']
-    lists = [reference, current]
+    lists = [reference or ['No reference set yet'], current]
     
     dfs = [pd.DataFrame(
         {'cand': cands, 'list': [list_name]*len(cands), 'rank': range(1, len(cands)+1)})
-        for (list_name, cands) in zip(list_names, lists)]
+        for (list_name, cands) in zip(list_names, lists) if cands is not None]
 
     base = alt.Chart(pd.concat(dfs))    
     x = alt.X('list:N', sort=list_names).axis(labelAngle=0, orient="top", title='')
@@ -229,7 +229,8 @@ if 'adv' in st.query_params:
         with st.container(width="content", height="content", horizontal=True, vertical_alignment="center"):
             ee = st.slider('Digits of precision', key='ee', max_value=15, min_value=1, value=ee)
             st.space()
-            compact = st.toggle('compact ballots', value=compact)        
+            compact = st.toggle('compact ballots', value=compact)
+            st.space()
             method = st.radio('Method', ['STV-SE', 'Schulze'], index=0, label_visibility = "collapsed", horizontal = True)
         if ballots is not None:
             (result, when) = calculate(profile=True)
@@ -287,17 +288,14 @@ if result is not None:
                 ordered_names = [candidates[c] for c in result if c is not None],
                 description = factoids)
             with st.container(horizontal=False):
-                if reference is None:
-                    st.text('Save a reference result first')
-                else:
-                    st.altair_chart(diff_chart(reference.ordered_names, current.ordered_names))
-                    cols = st.columns(2)
-                    for (r,c) in zip([reference, current], cols):
-                        with c:
-                            if r:
-                                st.caption(r.description)
-                            else:
-                                st.space()
+                st.altair_chart(diff_chart(reference and reference.ordered_names, current.ordered_names))
+                cols = st.columns(2)
+                for (r,c) in zip([reference, current], cols):
+                    with c:
+                        if r:
+                            st.caption(r.description)
+                        else:
+                            st.space()
                             
             with st.container(horizontal=False, width="content"):
                 st.button(":material/download:", key="dummy", disabled=True, 
