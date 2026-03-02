@@ -285,7 +285,7 @@ if result is not None:
         with st.container(horizontal=True):
             reference = st.session_state.get('reference_result')
             current = Result(
-                ordered_names = [candidates[c] for c in result if c is not None],
+                ordered_names = [candidates[c] for c in result if c is not None][:seats],
                 description = factoids)
             with st.container(horizontal=False):
                 st.altair_chart(diff_chart(reference and reference.ordered_names, current.ordered_names))
