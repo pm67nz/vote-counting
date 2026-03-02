@@ -26,6 +26,7 @@ import altair as alt
 
 from ballots import parse_ballots, RankedBallots
 from sequential_exclusion import generate_meek_se
+import schulze
 
 @st.cache_data(max_entries=1, show_spinner=False, scope="session")
 def read_ballots(data):
@@ -33,18 +34,51 @@ def read_ballots(data):
     return parse_ballots(text)
 
 @st.cache_data(max_entries=1, show_spinner=False, scope="session", hash_funcs = {RankedBallots: hash})
-def streamlit_meek_se(ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
+def calculate_order(method, ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
+    methods = {
+            'schulze': (schulze.schulze_order, False),
+            'stv-se': (generate_meek_se, True)}
+    (generator, bottom_up) = methods[method.lower()]
     result = []
-    my_bar = st.progress(0.0)
+    last = 0.0
+    my_bar = st.progress(last)
     profile_dict = defaultdict(list)
-    for (progress, msg, candidate) in generate_meek_se(ballots, 
-            max_seats=max_seats, withdrawn=withdrawn,
-            profile=profile_dict, eta=eta, compact=compact):
+
+    overheads = 0.0
+    progress = 0.0
+    def progress_callback(prog, msg):
+        nonlocal overheads, progress
+        progress = prog
+        t0 = time()
         my_bar.progress(progress, text=msg)
+        t1 = time()
+        overheads += t1 - t0
+    
+    expected = []
+    elapsed = []
+    positions = []
+    t0 = time()
+    for (position, candidate) in generator(ballots, 
+            max_seats=max_seats, withdrawn=withdrawn,
+            profile=profile_dict, eta=eta, compact=compact,
+            progress_callback = progress_callback):
+        t1 = time()
+        expected.append(progress - last)
+        last = progress
+        elapsed.append(t1 - t0)
+        positions.append(position)
         result.append(candidate)
+        t0 = time()
+    
+    total_elapsed = sum(elapsed)
+    profile_dict = {
+            'elapsed': elapsed + [e*total_elapsed for e in expected],
+            'position': positions + positions,
+            'series': ['actual']*len(positions) + ['forecast']*len(positions)}
     my_bar.empty()
-    result.reverse()    
-    return (result, pd.DataFrame(profile_dict))
+    if bottom_up:
+        result.reverse()    
+    return (result, pd.DataFrame(profile_dict), bottom_up)
 
 def parse_result(text):
     lines = text.split('\n')
@@ -170,9 +204,10 @@ with min_rank_opts:
 
 ee = 6
 compact = True
+method = "STV-SE"
 
 def calculate(profile=False):
-    (result, profile_df) = streamlit_meek_se(ballots, seats, withdrawn=[candidates.index(name) for name in withdrawn], 
+    (result, profile_df, bottom_up) = calculate_order(method, ballots, seats, withdrawn=[candidates.index(name) for name in withdrawn], 
         eta=10**-ee, compact=compact)
     when = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M %Z')
     
@@ -180,8 +215,10 @@ def calculate(profile=False):
     if profile:
         st.text('{:.2g} seconds'.format(sum(profile_df['elapsed'])))
         st.altair_chart(alt.Chart(profile_df).mark_bar().encode(
-            x = alt.X('position:O', sort="descending"),
+            x = alt.X('position:O', sort=("descending" if bottom_up else "ascending")),
             y = alt.Y('elapsed:Q'),
+            xOffset = "series:N",
+            color = alt.Color('series:N'),
         ), height=200)
         
     return (result, when)
@@ -193,6 +230,7 @@ if 'adv' in st.query_params:
             ee = st.slider('Digits of precision', key='ee', max_value=15, min_value=1, value=ee)
             st.space()
             compact = st.toggle('compact ballots', value=compact)        
+            method = st.radio('Method', ['STV-SE', 'Schulze'], index=0, label_visibility = "collapsed", horizontal = True)
         if ballots is not None:
             (result, when) = calculate(profile=True)
 elif ballots is not None:
@@ -211,8 +249,9 @@ if result is not None:
             'Listed Candidates': nc,
             'Withdrawn': ', '.join(withdrawn) or 'none',
             'Remaining Candidates': nvc,
-            'Counted at': when,
+            'Method': method,
             'Precision': f'1e-{ee}',
+            'Counted at': when,
         }.items())
             
     def generate_text(width, delim):

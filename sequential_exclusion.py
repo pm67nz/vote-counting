@@ -1,8 +1,8 @@
 import numpy as np
-from time import time
 from ballots import RankedBallots
 
-def generate_meek_se(ballots: RankedBallots, max_seats=None, withdrawn=[], profile={}, eta=1e-6, compact=True):
+def generate_meek_se(ballots: RankedBallots, max_seats=None, withdrawn=[], profile={}, eta=1e-6, compact=True,
+        progress_callback = None):
     """List Ranking by Sequential Exclusion using Meek STV with minimal complications,
     so no artificial limits on precision, and no complicated tie-breaking options.
     
@@ -12,6 +12,10 @@ def generate_meek_se(ballots: RankedBallots, max_seats=None, withdrawn=[], profi
     ballots - Collection of sequences of candidates.
     withdrawn - Collection of candidates to ignore.
     """
+
+    if progress_callback is None:
+        def progress_callback(*args):
+            pass
 
     num_candidates = ballots.num_candidates
     order_of_exclusion = []
@@ -32,7 +36,6 @@ def generate_meek_se(ballots: RankedBallots, max_seats=None, withdrawn=[], profi
     keep_factor = np.ones([num_candidates], float)
 
     for (position, effort) in zip(positions, efforts):
-        t0 = time()
         seats = min(position - 1, max_seats)
         method = 'STV-SE' if position <= max_seats else 'STV'
         
@@ -83,8 +86,6 @@ def generate_meek_se(ballots: RankedBallots, max_seats=None, withdrawn=[], profi
                 excluded.append(lowest)
                 keep_factor[lowest] = 0
                 hopeful[lowest] = False
-                yield (steps_done / steps_total, message, reverse_map[lowest])
+                progress_callback(steps_done / steps_total, message)
+                yield (position, reverse_map[lowest])
                 break
-        t1 = time()
-        profile['position'].append(position)
-        profile['elapsed'].append(t1 - t0)
