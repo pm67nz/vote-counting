@@ -266,18 +266,21 @@ if result is not None:
     formats = [
         ('Report', factoids, digits, '  ', 'txt'),
         ('CSV',  'Rank,Candidate', 1,  ',',  'csv'),
-        ('TSV',  'Rank\tCandidate', 1, '\t', 'txt'),
+        ('TSV',  'Rank\tCandidate', 1, '\t', 'tsv'),
         ]
     
     tabs = st.tabs([fmt[0] for fmt in formats] + ['Diff'])
+    title = title or method + ' Election'
     for (tab, fmt) in zip(tabs, formats):
         with tab:
             (name, head, width, delim, suffix) = fmt
             text = head + '\n' + generate_text(width, delim)
             with st.container(horizontal=True):
-                st.code(text, language=None)
+                file_name = st.text_input('file name', f'{title} Result.{suffix}', key="fn_"+name,
+                    label_visibility="collapsed")
                 st.download_button("", text, key=name, help=f"Download {name}", icon=":material/download:",
-                        on_click="ignore", file_name=f'{title} Result.{suffix}')
+                        on_click="ignore", file_name=file_name)
+            st.code(text, language=None)
 
     # DIFFING
     
