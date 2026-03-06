@@ -26,8 +26,11 @@ import altair as alt
 
 from ballots import parse_ballots, RankedBallots
 from sequential_exclusion import generate_meek_se
-import schulze
-
+try:
+    import schulze
+except ImportError:
+    schulze = None
+    
 @st.cache_data(max_entries=1, show_spinner=False, scope="session")
 def read_ballots(data):
     text = data.decode("utf-8")
@@ -35,9 +38,9 @@ def read_ballots(data):
 
 @st.cache_data(max_entries=1, show_spinner=False, scope="session", hash_funcs = {RankedBallots: hash})
 def calculate_order(method, ballots, max_seats=None, withdrawn=[], eta=1e-6, compact=True):
-    methods = {
-            'schulze': (schulze.schulze_order, False),
-            'stv-se': (generate_meek_se, True)}
+    methods = {'stv-se': (generate_meek_se, True)}
+    if schulze is not None:
+        methods['schulze'] = (schulze.schulze_order, False)
     (generator, bottom_up) = methods[method.lower()]
     result = []
     last = 0.0
