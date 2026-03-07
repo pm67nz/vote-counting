@@ -28,16 +28,15 @@ def pairwise_schulze(ballots, elected, a, b, eta=1e-3, squash=True):
     # Markus Schulze 2018
     # https://arxiv.org/abs/1804.02973
     assert not elected[a] or elected[b]
+    assert a != b, (a, b)
     seats = np.count_nonzero(elected) + 1
     
-    if squash:
-        considered = np.zeros_like(elected)
-        considered[elected] = True
-        considered[a] = True
-        considered[b] = True
-        (ballots, map_back, a, b) = ballots.subset(considered, a, b)
-        assert a != b, (a, b)
-    
+    considered = np.zeros_like(elected)
+    considered[elected] = True
+    considered[a] = True
+    considered[b] = True
+    (ballots, map_back, a, b) = ballots.subset(considered, a, b)
+     
     # Distribute the votes so as to maximise the minimum over the
     # elected candidates & {a}, with no vote going to a candidate
     # over which b is prefered. By recasting it as a maxflow problem
@@ -118,7 +117,7 @@ def schulze_order(ballots: RankedBallots, max_seats=None, withdrawn=[], profile=
         for (i, a) in enumerate(remaining):
             for (j, b) in enumerate(remaining):
                 if i == j: continue
-                condorcet_matrix[i,j] = pairwise_schulze(ballots, elected, a, b, eta=eta, squash=compact)
+                condorcet_matrix[i,j] = pairwise_schulze(ballots, elected, a, b, eta=eta)
                 progress += epp
                 if progress > last + 0.01:
                     progress_callback(min(progress/total_steps, 1.0), f'Position {position}')
