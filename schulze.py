@@ -1,4 +1,4 @@
-import networkx as nx
+from scipy.sparse import lil_array, csgraph
 import numpy as np
 from ballots import RankedBallots
     
@@ -22,7 +22,27 @@ def schulze_beatpath(d):
     order = [(sum(np.sign(p[i,:] - p[:,i])), i) for i in range(C)]
     return [i for (wins, i) in sorted(order, reverse=True)]
 
-def pairwise_schulze(ballots, elected, a, b, eta=1e-3, squash=True):
+def max_flow(approval_ballots, num_candidates, seats, eta):
+    (V, C) = (len(list(approval_ballots)), num_candidates)
+    (source, sink) = (V+C, V+C+1)
+    scale = int(1/eta)
+    INF = int((approval_ballots.votes + 1) * scale)
+    candidates = [V+c for c in range(num_candidates)]
+    G = lil_array((V+C+2, V+C+2), dtype=int)
+    for (v, (weight, ballot)) in enumerate(approval_ballots):
+        G[source, v] = int(weight * scale)
+        G[v, [V+c for c in ballot]] = INF
+    
+    r = [int(approval_ballots.votes / seats) * scale]
+    while len(r) < 2 or r[-2] != r[-1]:
+        G[candidates, sink] = r[-1]
+        if len(r)==1:
+            G = G.tocsr()
+        flow = csgraph.maximum_flow(G, source, sink)
+        r.append(int(flow.flow_value / seats))
+    return r[-1] / scale
+    
+def pairwise_schulze(ballots, elected, a, b, eta):
     # The Schulze Method of Voting
     # Markus Schulze 2018
     # https://arxiv.org/abs/1804.02973
@@ -40,34 +60,8 @@ def pairwise_schulze(ballots, elected, a, b, eta=1e-3, squash=True):
     # elected candidates & {a}, with no vote going to a candidate
     # over which b is prefered. By recasting it as a maxflow problem
     # with the constraint that the winners all get the same quota.
-
     approval_ballots = ballots.approved_over(b)
-    
-    G = nx.DiGraph()
-    G.add_node('source')
-    G.add_node('sink')
-    #print('  >', a, 'vs', b, 'out of', N)
-    for c in range(ballots.num_candidates):
-        if c == b: continue
-        G.add_node(f'candidate_{c}')
-        G.add_edge(f'candidate_{c}', 'sink')
-    for (v, (weight, ballot)) in enumerate(approval_ballots):
-        G.add_node(f'voter_{v}')
-        G.add_edge('source', f'voter_{v}', capacity=weight*1.0)
-        for c in ballot:
-            #if c == b: break
-            G.add_edge(f'voter_{v}', f'candidate_{c}')
-    
-    r = [approval_ballots.votes / seats]
-    while len(r) < 2 or r[-2] - r[-1] > eta:
-        for c in range(ballots.num_candidates):
-            if c == b: continue
-            G.edges[f'candidate_{c}', 'sink']['capacity'] = r[-1]
-        flow = nx.maximum_flow_value(G, 'source', 'sink')
-        r.append(flow / seats)
-    
-    #print('    ', len(r), r[:3], r[-1])
-    return r[-1]
+    return max_flow(approval_ballots, ballots.num_candidates, seats, eta=eta)
 
 def schulze_order(ballots: RankedBallots, max_seats=None, withdrawn=[], eta=None, 
         compact=None, progress_callback=None):
@@ -92,7 +86,7 @@ def schulze_order(ballots: RankedBallots, max_seats=None, withdrawn=[], eta=None
     max_seats = min(max_seats or nvc, nvc)
     
     pairs = [(remain * remain - remain) for remain in range(nvc-1, nvc-max_seats, -1)]
-    effort_per_pair = [(cands * cands) for cands in range(3, max_seats + 2)]
+    effort_per_pair = [(ballots.votes+cands) for cands in range(3, max_seats+2)]
     total_steps = sum(p*e for (p,e) in zip(pairs, effort_per_pair))
 
     progress = 0
