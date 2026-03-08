@@ -231,9 +231,11 @@ if 'adv' in st.query_params:
         with st.container(width="content", height="content", horizontal=True, vertical_alignment="center"):
             ee = st.slider('Digits of precision', key='ee', max_value=15, min_value=1, value=ee)
             st.space()
-            compact = st.toggle('compact ballots', value=compact)
+            method = st.radio('Method', ['STV-SE', 'Schulze'], index=0, 
+                horizontal = True, help="This implementation of Schulze Proportional Ranking is not well tested and "
+                "lacks the [original specification](https://arxiv.org/pdf/1804.02973)'s tie-breaking and ballot completion steps.")
             st.space()
-            method = st.radio('Method', ['STV-SE', 'Schulze'], index=0, label_visibility = "collapsed", horizontal = True)
+            compact = st.toggle('Compact ballots', value=compact, help="No impact on result, only speed.")
         if ballots is not None:
             (result, when) = calculate(profile=True)
 elif ballots is not None:
