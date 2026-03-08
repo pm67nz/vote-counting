@@ -1,7 +1,7 @@
 import numpy as np
 from ballots import RankedBallots
 
-def generate_meek_se(ballots: RankedBallots, max_seats=None, withdrawn=[], profile={}, eta=1e-6, compact=True,
+def generate_meek_se(ballots: RankedBallots, max_seats=None, withdrawn=[], eta=1e-6, compact=True,
         progress_callback = None):
     """List Ranking by Sequential Exclusion using Meek STV with minimal complications,
     so no artificial limits on precision, and no complicated tie-breaking options.

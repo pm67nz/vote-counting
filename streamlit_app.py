@@ -45,7 +45,6 @@ def calculate_order(method, ballots, max_seats=None, withdrawn=[], eta=1e-6, com
     result = []
     last = 0.0
     my_bar = st.progress(last)
-    profile_dict = defaultdict(list)
 
     overheads = 0.0
     progress = 0.0
@@ -63,7 +62,7 @@ def calculate_order(method, ballots, max_seats=None, withdrawn=[], eta=1e-6, com
     t0 = time()
     for (position, candidate) in generator(ballots, 
             max_seats=max_seats, withdrawn=withdrawn,
-            profile=profile_dict, eta=eta, compact=compact,
+            eta=eta, compact=compact,
             progress_callback = progress_callback):
         t1 = time()
         expected.append(progress - last)

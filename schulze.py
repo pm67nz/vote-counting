@@ -1,7 +1,6 @@
 import networkx as nx
 import numpy as np
 from ballots import RankedBallots
-from time import time
     
 def schulze_beatpath(d):    
     # Input: d[i,j], the number of voters who prefer candidate i to candidate j.
@@ -70,8 +69,8 @@ def pairwise_schulze(ballots, elected, a, b, eta=1e-3, squash=True):
     #print('    ', len(r), r[:3], r[-1])
     return r[-1]
 
-def schulze_order(ballots: RankedBallots, max_seats=None, withdrawn=[], profile={}, eta=1e-3, compact=True,
-        progress_callback=None):
+def schulze_order(ballots: RankedBallots, max_seats=None, withdrawn=[], eta=None, 
+        compact=None, progress_callback=None):
     """List Ranking the method of Markus Schulze.
 
     This function handles candidates as integer ordinals, as in the .blt file format,
