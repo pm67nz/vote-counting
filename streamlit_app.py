@@ -204,17 +204,29 @@ with min_rank_opts:
     reserved = st.radio("Places to add on top for leader(s) etc", [0,1,2], 
             index = int(st.query_params.get('top') or 0), label_visibility = "collapsed", horizontal = True)
 
+method = "STV-SE"
 ee = 6
 compact = True
-method = "STV-SE"
 
-def calculate(profile=False):
+result = None
+if 'adv' in st.query_params:
+    with st.container(border=True):
+        with st.container(width="content", height="content", horizontal=True, vertical_alignment="center"):
+            method = st.radio('Method', ['STV-SE', 'Schulze'], index=0, 
+                horizontal = True, help="This implementation of Schulze Proportional Ranking is not well tested and "
+                "lacks the [original specification](https://arxiv.org/pdf/1804.02973)'s tie-breaking and ballot completion steps.")
+            st.space()
+            ee = st.slider('Digits of precision', key='ee', max_value=15, min_value=1, value=ee)
+            st.space()
+            compact = st.toggle('Compact ballots', value=compact, help="No impact on result, only speed.")
+
+if ballots is not None:
     (result, profile_df, bottom_up) = calculate_order(method, ballots, seats, withdrawn=[candidates.index(name) for name in withdrawn], 
         eta=10**-ee, compact=compact)
     when = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M %Z')
     
     # PERFORMANCE PROFILING
-    if profile:
+    if 'profile' in st.query_params:
         st.text('{:.2g} seconds'.format(sum(profile_df['elapsed'])))
         st.altair_chart(alt.Chart(profile_df).mark_bar().encode(
             x = alt.X('position:O', sort=("descending" if bottom_up else "ascending")),
@@ -222,24 +234,7 @@ def calculate(profile=False):
             xOffset = "series:N",
             color = alt.Color('series:N'),
         ), height=200)
-        
-    return (result, when)
 
-result = None
-if 'adv' in st.query_params:
-    with st.container(border=True):
-        with st.container(width="content", height="content", horizontal=True, vertical_alignment="center"):
-            ee = st.slider('Digits of precision', key='ee', max_value=15, min_value=1, value=ee)
-            st.space()
-            method = st.radio('Method', ['STV-SE', 'Schulze'], index=0, 
-                horizontal = True, help="This implementation of Schulze Proportional Ranking is not well tested and "
-                "lacks the [original specification](https://arxiv.org/pdf/1804.02973)'s tie-breaking and ballot completion steps.")
-            st.space()
-            compact = st.toggle('Compact ballots', value=compact, help="No impact on result, only speed.")
-        if ballots is not None:
-            (result, when) = calculate(profile=True)
-elif ballots is not None:
-    (result, when) = calculate()
     
 if result is not None:
     result = [None] * reserved + result
